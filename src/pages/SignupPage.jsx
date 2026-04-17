@@ -367,9 +367,13 @@ export default function SignupPage({ onAuthenticated }) {
 
           <p className="mt-6 text-sm font-semibold text-[#5e6678]">
             Already have an account?{' '}
-            <Link to="/login" className="font-black text-[#1f2430]">
+            <button
+              type="button"
+              onClick={() => navigate('/login')}
+              className="font-black text-[#1f2430] transition hover:text-[#0f766e]"
+            >
               Login
-            </Link>
+            </button>
           </p>
         </div>
       </div>

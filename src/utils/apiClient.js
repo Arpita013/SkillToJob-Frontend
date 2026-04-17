@@ -1,5 +1,5 @@
 const configuredApiOrigin = String(
-  import.meta.env.VITE_API_ORIGIN || import.meta.env.VITE_API_BASE_URL || '',
+  import.meta.env.VITE_API_ORIGIN || import.meta.env.VITE_API_BASE_URL || 'https://skilltojob-backend.onrender.com',
 ).trim().replace(/\/+$/, '');
 
 const localApiOrigins = ['http://127.0.0.1:5001', 'http://localhost:5001'];
@@ -74,4 +74,3 @@ export async function fetchApi(path, options) {
   error.cause = lastError;
   throw error;
 }
-

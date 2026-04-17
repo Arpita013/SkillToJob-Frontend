@@ -133,9 +133,13 @@ export default function LoginPage({ onAuthenticated }) {
 
           <p className="mt-6 text-sm font-semibold text-[#5e6678]">
             New here?{' '}
-            <Link to="/signup" className="font-black text-[#1f2430]">
+            <button
+              type="button"
+              onClick={() => navigate('/signup')}
+              className="font-black text-[#1f2430] transition hover:text-[#0f766e]"
+            >
               Create an account
-            </Link>
+            </button>
           </p>
         </div>
       </div>

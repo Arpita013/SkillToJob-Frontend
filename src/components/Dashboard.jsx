@@ -8,6 +8,7 @@ import WorkflowMap from './WorkflowMap.jsx';
 import BadgeShelf from './BadgeShelf.jsx';
 import PhaseQuizPanel from './PhaseQuizPanel.jsx';
 import PhaseProjectPanel from './PhaseProjectPanel.jsx';
+import { fetchApi } from '../utils/apiClient.js';
 
 function getResourceMeta(name) {
   const n = String(name || '').toLowerCase();
@@ -20,6 +21,24 @@ function getResourceMeta(name) {
 
 function normalizeText(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function normalizeSkillsInput(value) {
+  return String(value || '')
+    .split(',')
+    .map((skill) => String(skill || '').trim())
+    .filter(Boolean);
+}
+
+async function readDashboardPayload(response) {
+  const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+
+  if (contentType.includes('application/json')) {
+    return response.json().catch(() => null);
+  }
+
+  const text = await response.text().catch(() => '');
+  return text ? { message: text } : null;
 }
 
 function buildFallbackJobs(targetRole) {
@@ -161,6 +180,13 @@ export default function Dashboard({ userData, onLogout, onUpdateUserData }) {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('overview');
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  const [isUpdatingRoadmap, setIsUpdatingRoadmap] = useState(false);
+  const [roadmapEditError, setRoadmapEditError] = useState('');
+  const [roadmapEditNotice, setRoadmapEditNotice] = useState('');
+  const [roadmapEditForm, setRoadmapEditForm] = useState(() => ({
+    targetJob: String(userData?.targetJob || '').trim(),
+    skills: Array.isArray(userData?.skills) ? userData.skills.join(', ') : '',
+  }));
   const pdfRef = useRef(null);
   const quizPanelRef = useRef(null);
   const projectPanelRef = useRef(null);
@@ -241,6 +267,13 @@ export default function Dashboard({ userData, onLogout, onUpdateUserData }) {
     }
   }, [roadmap, selectedRoadmapStepNumber, currentRoadmapStepNumber]);
 
+  useEffect(() => {
+    setRoadmapEditForm({
+      targetJob: String(userData?.targetJob || '').trim(),
+      skills: Array.isArray(userData?.skills) ? userData.skills.join(', ') : '',
+    });
+  }, [userData?.targetJob, userData?.skills]);
+
   const triggerPhaseQuizLaunch = (stepNumber) => {
     setSelectedRoadmapStepNumber(stepNumber);
     setQuizLaunchRequest({
@@ -291,6 +324,24 @@ export default function Dashboard({ userData, onLogout, onUpdateUserData }) {
 
     setActiveTab('roadmap');
     window.setTimeout(runScroll, 0);
+  };
+
+  const handleRoadmapEditChange = (field, value) => {
+    setRoadmapEditError('');
+    setRoadmapEditNotice('');
+    setRoadmapEditForm((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  };
+
+  const resetRoadmapEditForm = () => {
+    setRoadmapEditError('');
+    setRoadmapEditNotice('');
+    setRoadmapEditForm({
+      targetJob: String(userData?.targetJob || '').trim(),
+      skills: Array.isArray(userData?.skills) ? userData.skills.join(', ') : '',
+    });
   };
 
   const handleDownloadRoadmapPdf = async () => {
@@ -487,6 +538,169 @@ export default function Dashboard({ userData, onLogout, onUpdateUserData }) {
     onUpdateUserData?.(next);
   };
 
+  const normalizedCurrentSkills = useMemo(
+    () => (Array.isArray(userData?.skills) ? userData.skills : []).map(normalizeText).filter(Boolean).join('|'),
+    [userData?.skills],
+  );
+  const normalizedEditedSkills = useMemo(
+    () => normalizeSkillsInput(roadmapEditForm.skills),
+    [roadmapEditForm.skills],
+  );
+  const hasRoadmapEdits = useMemo(() => {
+    return (
+      normalizeText(roadmapEditForm.targetJob) !== normalizeText(userData?.targetJob) ||
+      normalizedEditedSkills.map(normalizeText).join('|') !== normalizedCurrentSkills
+    );
+  }, [roadmapEditForm.targetJob, userData?.targetJob, normalizedEditedSkills, normalizedCurrentSkills]);
+
+  const handleRoadmapRefresh = async (event) => {
+    event.preventDefault();
+    setRoadmapEditError('');
+    setRoadmapEditNotice('');
+
+    const targetJob = String(roadmapEditForm.targetJob || '').trim();
+    const skills = normalizedEditedSkills;
+    const name = String(userData?.name || '').trim();
+    const education = String(userData?.education || '').trim();
+
+    if (!targetJob) {
+      setRoadmapEditError('Target job is required to regenerate your roadmap.');
+      return;
+    }
+
+    if (!name || !education) {
+      setRoadmapEditError('Your profile is missing name or education. Please complete onboarding again.');
+      return;
+    }
+
+    setIsUpdatingRoadmap(true);
+    try {
+      const response = await fetchApi('/api/user/onboarding', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          education,
+          targetJob,
+          skills,
+        }),
+      });
+
+      const data = await readDashboardPayload(response);
+
+      if (!response.ok) {
+        throw new Error(String(data?.message || 'Could not update roadmap.'));
+      }
+
+      const nextProfile = {
+        ...userData,
+        targetJob,
+        skills,
+        roadmap: Array.isArray(data?.roadmap) ? data.roadmap : [],
+        jobMatches: Array.isArray(data?.jobMatches) ? data.jobMatches : [],
+        phaseProgress: [],
+        badges: [],
+        phaseProjects: [],
+        currentStepIndex: 0,
+      };
+
+      onUpdateUserData?.(nextProfile);
+      setSelectedRoadmapStepNumber(1);
+      setQuizLaunchRequest(null);
+      setProjectLaunchRequest(null);
+      setActiveTab('roadmap');
+      setRoadmapEditNotice('Roadmap updated. Your new target role and skills are now reflected across the dashboard.');
+    } catch (error) {
+      setRoadmapEditError(String(error?.message || 'Could not update roadmap.'));
+    } finally {
+      setIsUpdatingRoadmap(false);
+    }
+  };
+
+  const careerFocusEditor = (
+    <div className="tab-content fade-in">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 rounded-[2.5rem] bg-[#f0f3ff] p-6 sm:p-10">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="mb-2 inline-flex rounded-full bg-white px-4 py-2 text-[11px] font-black uppercase tracking-[0.24em] text-indigo-500 shadow-sm">
+              Career Editor
+            </p>
+            <h2 className="text-3xl font-black text-[#3b3a62]">Edit Career Focus</h2>
+            <p className="mt-2 max-w-2xl text-sm font-medium text-slate-500">
+              Update your skills or future role here, then regenerate the roadmap with one click.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="rounded-xl border border-[#1f2430]/10 bg-white px-4 py-2 text-xs font-black uppercase tracking-[0.14em] text-[#1f2430] transition hover:-translate-y-0.5 disabled:opacity-60"
+            onClick={resetRoadmapEditForm}
+            disabled={isUpdatingRoadmap || !hasRoadmapEdits}
+          >
+            Reset
+          </button>
+        </div>
+
+        <form
+          className="relative z-20 w-full rounded-[2rem] border border-slate-100 bg-white p-6 shadow-[0_5px_15px_rgba(0,0,0,0.02)]"
+          onSubmit={handleRoadmapRefresh}
+        >
+          <div className="grid grid-cols-1 gap-4">
+            <label className="flex flex-col gap-2">
+              <span className="text-xs font-black uppercase tracking-[0.16em] text-slate-500">Target Job</span>
+              <input
+                type="text"
+                value={roadmapEditForm.targetJob}
+                onChange={(event) => handleRoadmapEditChange('targetJob', event.target.value)}
+                placeholder="Software Developer"
+                className="rounded-[18px] border border-[#1f2430]/10 bg-white px-4 py-3 text-[#1f2430] outline-none transition focus:border-[#0f766e]/40 focus:shadow-[0_0_0_4px_rgba(20,184,166,0.08)]"
+              />
+            </label>
+
+            <label className="flex flex-col gap-2">
+              <span className="text-xs font-black uppercase tracking-[0.16em] text-slate-500">Skills</span>
+              <textarea
+                rows="3"
+                value={roadmapEditForm.skills}
+                onChange={(event) => handleRoadmapEditChange('skills', event.target.value)}
+                placeholder="React, Node.js, communication"
+                className="rounded-[18px] border border-[#1f2430]/10 bg-white px-4 py-3 text-[#1f2430] outline-none transition focus:border-[#0f766e]/40 focus:shadow-[0_0_0_4px_rgba(20,184,166,0.08)]"
+              />
+            </label>
+          </div>
+
+          <p className="mt-4 text-xs font-semibold text-slate-500">
+            Regenerating the roadmap resets quiz, badge, and project progress for the current learning path.
+          </p>
+
+          {roadmapEditNotice ? (
+            <div className="mt-4 rounded-[18px] border border-[#0f766e]/15 bg-[#ecfeff] px-4 py-3 text-sm font-bold text-[#0f766e]">
+              {roadmapEditNotice}
+            </div>
+          ) : null}
+
+          {roadmapEditError ? (
+            <div className="mt-4 rounded-[18px] border border-[#ef4444]/15 bg-[#fef2f2] px-4 py-3 text-sm font-bold text-[#b91c1c]">
+              {roadmapEditError}
+            </div>
+          ) : null}
+
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <button
+              type="submit"
+              disabled={isUpdatingRoadmap || !hasRoadmapEdits}
+              className="rounded-[18px] bg-[#1f2430] px-5 py-3 text-sm font-black text-[#fff7eb] shadow-[0_18px_40px_rgba(31,36,48,0.12)] transition hover:-translate-y-0.5 disabled:opacity-60"
+            >
+              {isUpdatingRoadmap ? 'Updating Roadmap...' : 'Save Changes'}
+            </button>
+            <span className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">
+              {hasRoadmapEdits ? 'Ready to refresh roadmap' : 'No changes yet'}
+            </span>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+
   return (
     <div className="dashboard-wrapper">
       <aside className="dashboard-sidebar">
@@ -519,16 +733,27 @@ export default function Dashboard({ userData, onLogout, onUpdateUserData }) {
           </button>
         </nav>
 
-        <button
-          className="logout-button"
-          onClick={() => {
-            onLogout?.();
-            navigate('/');
-          }}
-        >
-          <span>🚪</span>
-          <span>Logout</span>
-        </button>
+        <div className="sidebar-actions">
+          <button
+            className={`nav-item ${activeTab === 'edit' ? 'active' : ''}`}
+            onClick={() => setActiveTab('edit')}
+            type="button"
+          >
+            <span className="nav-icon">✏️</span>
+            <span>Edit Career</span>
+          </button>
+
+          <button
+            className="logout-button"
+            onClick={() => {
+              onLogout?.();
+              navigate('/');
+            }}
+          >
+            <span>🚪</span>
+            <span>Logout</span>
+          </button>
+        </div>
       </aside>
 
       <main className="dashboard-main">
@@ -770,7 +995,7 @@ export default function Dashboard({ userData, onLogout, onUpdateUserData }) {
                        const displayPercent = percent === 0 ? 0 : percent;
 
                        return (
-                         <div key={i} className="bg-white rounded-[1.5rem] p-5 shadow-[0_5px_15px_rgba(0,0,0,0.02)] hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 border border-white flex gap-5 items-center group cursor-pointer w-full" onClick={() => setActiveTab('roadmap')}>
+                         <div key={i} className="bg-white rounded-[1.5rem] p-5 shadow-[0_5px_15px_rgba(0,0,0,0.02)] hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 border border-white flex gap-5 items-center group cursor-pointer w-full" onClick={() => scrollToRoadmapStepForSkill(task.title)}>
                             
                             {/* CSS Conic Gradient Donut Chart */}
                             <div className="relative w-16 h-16 rounded-full flex items-center justify-center shrink-0 shadow-inner group-hover:scale-105 transition-transform" style={{ background: displayPercent === 0 ? '#f1f5f9' : `conic-gradient(${colors.border} ${displayPercent}%, #f1f5f9 0)` }}>
@@ -929,6 +1154,8 @@ export default function Dashboard({ userData, onLogout, onUpdateUserData }) {
               ) : null}
             </div>
           )}
+
+          {activeTab === 'edit' && careerFocusEditor}
 
           {activeTab === 'roadmap' && (
             <div className="tab-content fade-in">
