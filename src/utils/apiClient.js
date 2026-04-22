@@ -1,6 +1,7 @@
 const configuredApiOrigin = String(
-  import.meta.env.VITE_API_ORIGIN || import.meta.env.VITE_API_BASE_URL || 'https://skilltojob-backend.onrender.com',
+  import.meta.env.VITE_API_ORIGIN || import.meta.env.VITE_API_BASE_URL || '',
 ).trim().replace(/\/+$/, '');
+const hostedApiOrigin = 'https://skilltojob-backend.onrender.com';
 
 const localApiOrigins = ['http://127.0.0.1:5001', 'http://localhost:5001'];
 
@@ -17,20 +18,34 @@ function canUseRelativeApiPath() {
   return window.location.protocol === 'http:' || window.location.protocol === 'https:';
 }
 
+function isLocalRuntime() {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  const hostname = String(window.location.hostname || '').toLowerCase();
+
+  return window.location.protocol === 'file:' || hostname === '127.0.0.1' || hostname === 'localhost';
+}
+
 function buildApiCandidates(path) {
   const normalizedPath = normalizeApiPath(path);
   const candidates = [];
-
-  if (configuredApiOrigin) {
-    candidates.push(`${configuredApiOrigin}${normalizedPath}`);
-  }
 
   if (canUseRelativeApiPath()) {
     candidates.push(normalizedPath);
   }
 
-  for (const origin of localApiOrigins) {
-    candidates.push(`${origin}${normalizedPath}`);
+  if (isLocalRuntime()) {
+    for (const origin of localApiOrigins) {
+      candidates.push(`${origin}${normalizedPath}`);
+    }
+  }
+
+  if (configuredApiOrigin) {
+    candidates.push(`${configuredApiOrigin}${normalizedPath}`);
+  } else if (!isLocalRuntime()) {
+    candidates.push(`${hostedApiOrigin}${normalizedPath}`);
   }
 
   return [...new Set(candidates)];
